@@ -1,46 +1,55 @@
 use crate::components::agent::Agent;
 use crate::components::behaviour::Behaviour;
 use crate::components::belief::Belief;
+use crate::components::identifiers::UUID;
 use crate::resources::time::SimulationTime;
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
-use bevy_rand::global::GlobalRng;
 use bevy_rand::prelude::WyRand;
 use itertools::Itertools;
 use rand::prelude::*;
 
+use crate::resources::seed::Seed;
+
 pub fn perform_actions(
-    mut agent_query: Query<&mut Agent>,
+    mut agent_query: Query<(&mut Agent, &UUID)>,
     belief_query: Query<Entity, With<Belief>>,
     behaviour_query: Query<Entity, With<Behaviour>>,
-    mut rng: Single<&mut WyRand, With<GlobalRng>>,
     sim_time: Res<SimulationTime>,
+    seed: Res<Seed>,
 ) {
-    info!("[time={}] performing actions", sim_time.0);
-    for mut agent in agent_query.iter_mut() {
-        perform_action(&mut agent, belief_query, behaviour_query, &mut rng);
-    }
+    info!("[time={}] Performing actions", sim_time.0);
+    let beliefs: Vec<Entity> = belief_query.iter().collect();
+    let behaviours: Vec<Entity> = behaviour_query.iter().collect();
+
+    agent_query.par_iter_mut().for_each(|(mut agent, uuid)| {
+        // Deterministic seeding per agent and tick, incorporating the global seed if provided
+        let base_seed = seed.0.unwrap_or(0);
+        let inner_rng = wyrand::WyRand::new((uuid.0.as_u128() ^ (sim_time.0 as u128) ^ (base_seed as u128)) as u64);
+        let mut rng = WyRand::new(inner_rng);
+        perform_action(&mut agent, &beliefs, &behaviours, &mut rng);
+    });
 }
 
 fn perform_action(
     agent: &mut Agent,
-    belief_query: Query<Entity, With<Belief>>,
-    behaviour_query: Query<Entity, With<Behaviour>>,
+    beliefs: &[Entity],
+    behaviours: &[Entity],
     rng: &mut WyRand,
 ) {
-    let unnormalized_probabilities: Vec<(Entity, f64)> = behaviour_query
+    let unnormalized_probabilities: Vec<(Entity, f64)> = behaviours
         .iter()
         .map(|behaviour_entity| {
             (
-                behaviour_entity,
-                belief_query
+                *behaviour_entity,
+                beliefs
                     .iter()
                     .map(|belief_entity| {
                         agent
                             .performance_relationships
-                            .get(&belief_entity)
+                            .get(belief_entity)
                             .expect("Missing performance relationship")
-                            .get(&behaviour_entity)
+                            .get(behaviour_entity)
                             .unwrap_or(&0.0)
                     })
                     .sum::<f64>(),
@@ -104,33 +113,35 @@ pub fn update_activations_for_all_agents_and_beliefs(
         .map(|(entity, agent)| (entity, agent.actions[sim_time.0 - 1]))
         .collect();
 
-    for (_, mut agent) in agent_query.iter_mut() {
-        update_activations_for_all_belief(&mut agent, &actions, &belief_query, &sim_time);
-    }
+    let beliefs: Vec<(Entity, &Belief)> = belief_query.iter().collect();
+
+    agent_query.par_iter_mut().for_each(|(_, mut agent)| {
+        update_activations_for_all_belief(&mut agent, &actions, &beliefs, &sim_time);
+    });
 }
 
 fn update_activations_for_all_belief(
     agent: &mut Agent,
-    actions_at_previous_time: &Vec<(Entity, Entity)>,
-    belief_query: &Query<(Entity, &Belief)>,
-    sim_time: &Res<SimulationTime>,
+    actions_at_previous_time: &[(Entity, Entity)],
+    beliefs: &[(Entity, &Belief)],
+    sim_time: &SimulationTime,
 ) {
-    for entry in belief_query.iter() {
+    for entry in beliefs.iter() {
         update_activation(
             agent,
             actions_at_previous_time,
-            &entry,
-            belief_query,
-            &sim_time,
+            entry,
+            beliefs,
+            sim_time,
         );
     }
 }
 
 fn update_activation(
     agent: &mut Agent,
-    actions_at_previous_time: &Vec<(Entity, Entity)>,
+    actions_at_previous_time: &[(Entity, Entity)],
     belief: &(Entity, &Belief),
-    belief_query: &Query<(Entity, &Belief)>,
+    beliefs: &[(Entity, &Belief)],
     sim_time: &SimulationTime,
 ) {
     let delta = *agent.deltas.get(&belief.0).expect("Missing delta");
@@ -141,7 +152,7 @@ fn update_activation(
         agent,
         actions_at_previous_time,
         belief,
-        belief_query,
+        beliefs,
         &SimulationTime(sim_time.0 - 1),
     );
     let new_activation = f64::max(
@@ -157,22 +168,22 @@ fn update_activation(
 
 fn activation_change(
     agent: &mut Agent,
-    actions_at_previous_time: &Vec<(Entity, Entity)>,
+    actions_at_previous_time: &[(Entity, Entity)],
     belief: &(Entity, &Belief),
-    belief_query: &Query<(Entity, &Belief)>,
+    beliefs: &[(Entity, &Belief)],
     sim_time: &SimulationTime,
 ) -> f64 {
     let pressure = pressure(agent, actions_at_previous_time, belief);
     if pressure > 0.0 {
-        (1.0 + contextualise(agent, belief, belief_query, sim_time)) / 2.0 * pressure
+        (1.0 + contextualise(agent, belief, beliefs, sim_time)) / 2.0 * pressure
     } else {
-        (1.0 - contextualise(agent, belief, belief_query, sim_time)) / 2.0 * pressure
+        (1.0 - contextualise(agent, belief, beliefs, sim_time)) / 2.0 * pressure
     }
 }
 
 fn pressure(
     agent: &mut Agent,
-    actions_at_previous_time: &Vec<(Entity, Entity)>,
+    actions_at_previous_time: &[(Entity, Entity)],
     belief: &(Entity, &Belief),
 ) -> f64 {
     let size = agent.friends.len();
@@ -180,7 +191,6 @@ fn pressure(
         0.0
     } else {
         actions_at_previous_time
-            .as_slice()
             .iter()
             .map(|(a2, action)| {
                 belief.1.perceptions.get(action).unwrap_or(&0.0) * agent.friends.get(a2).unwrap_or(&0.0)
@@ -193,16 +203,16 @@ fn pressure(
 fn contextualise(
     agent: &mut Agent,
     belief: &(Entity, &Belief),
-    belief_query: &Query<(Entity, &Belief)>,
+    beliefs: &[(Entity, &Belief)],
     sim_time: &SimulationTime,
 ) -> f64 {
-    let size = belief_query.iter().len();
+    let size = beliefs.len();
     if size == 0 {
         0.0
     } else {
-        belief_query
+        beliefs
             .iter()
-            .map(|b2| weighted_relationship(agent, belief, &b2, sim_time))
+            .map(|b2| weighted_relationship(agent, belief, b2, sim_time))
             .sum::<f64>()
             / size as f64
     }

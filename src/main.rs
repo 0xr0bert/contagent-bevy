@@ -13,6 +13,7 @@ use components::identifiers::UUID;
 use json::{load_agents_from_zstd_json, load_behaviours_from_json, load_beliefs_from_json, SummarySpec};
 use queries::agent::{perform_actions, update_activations_for_all_agents_and_beliefs};
 use resources::time::SimulationTime;
+use resources::seed::Seed;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -68,6 +69,8 @@ fn setup_app(args: &Args, agents: Agents, beliefs: components::belief::Beliefs, 
         MinimalPlugins,
         bevy::log::LogPlugin::default(),
     ));
+
+    app.insert_resource(Seed(args.seed));
 
     if let Some(seed) = args.seed {
         app.add_plugins(EntropyPlugin::<WyRand>::with_seed(seed.to_le_bytes()));
