@@ -2086,6 +2086,8 @@ dependencies = [
  "clap",
  "itertools 0.14.0",
  "rand",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
