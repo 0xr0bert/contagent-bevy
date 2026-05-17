@@ -1,5 +1,5 @@
-use bevy::ecs::entity::EntityHashMap;
 use crate::components::identifiers::UUID;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -10,7 +10,4 @@ pub struct Belief {
 }
 
 #[derive(Bundle)]
-pub struct BeliefBundle(
-    pub Belief,
-    pub Name,
-);
+pub struct BeliefBundle(pub Belief, pub Name);

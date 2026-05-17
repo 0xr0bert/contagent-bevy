@@ -1,5 +1,5 @@
-use bevy::ecs::entity::EntityHashMap;
 use crate::components::identifiers::UUID;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 
 #[derive(Component)]

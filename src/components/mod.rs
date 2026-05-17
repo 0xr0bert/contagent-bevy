@@ -1,4 +1,4 @@
-pub mod identifiers;
+pub mod agent;
 pub mod behaviour;
 pub mod belief;
-pub mod agent;
+pub mod identifiers;

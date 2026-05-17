@@ -1,19 +1,19 @@
+use crate::components::agent::Agent;
+use crate::components::behaviour::Behaviour;
+use crate::components::belief::Belief;
+use crate::resources::time::SimulationTime;
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 use bevy_rand::global::GlobalRng;
 use bevy_rand::prelude::WyRand;
-use crate::components::agent::Agent;
-use crate::components::behaviour::Behaviour;
-use crate::components::belief::Belief;
 use itertools::Itertools;
 use rand::prelude::*;
-use crate::resources::time::SimulationTime;
 
 pub fn perform_actions(
     mut agent_query: Query<&mut Agent>,
     belief_query: Query<Entity, With<Belief>>,
     behaviour_query: Query<Entity, With<Behaviour>>,
-    mut rng: Single<&mut WyRand, With<GlobalRng>>
+    mut rng: Single<&mut WyRand, With<GlobalRng>>,
 ) {
     for mut agent in agent_query.iter_mut() {
         perform_action(&mut agent, belief_query, behaviour_query, &mut rng);
@@ -24,22 +24,26 @@ fn perform_action(
     agent: &mut Agent,
     belief_query: Query<Entity, With<Belief>>,
     behaviour_query: Query<Entity, With<Behaviour>>,
-    rng: &mut WyRand
+    rng: &mut WyRand,
 ) {
     let unnormalized_probabilities: Vec<(Entity, f64)> = behaviour_query
         .iter()
-        .map(|behaviour_entity| (behaviour_entity, belief_query
-            .iter()
-            .map(|belief_entity| {
-                agent
-                    .performance_relationships
-                    .get(&belief_entity)
-                    .expect("Missing performance relationship")
-                    .get(&behaviour_entity)
-                    .unwrap_or(&0.0)
-            })
-            .sum::<f64>()
-        ))
+        .map(|behaviour_entity| {
+            (
+                behaviour_entity,
+                belief_query
+                    .iter()
+                    .map(|belief_entity| {
+                        agent
+                            .performance_relationships
+                            .get(&belief_entity)
+                            .expect("Missing performance relationship")
+                            .get(&behaviour_entity)
+                            .unwrap_or(&0.0)
+                    })
+                    .sum::<f64>(),
+            )
+        })
         .sorted_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .collect();
 
@@ -55,7 +59,11 @@ fn perform_action(
         if filtered_probs.len() == 1 {
             agent.actions.push(filtered_probs[0].0)
         } else {
-            let normalizing_factor = filtered_probs.as_slice().iter().map(|(_, prob)| prob).sum::<f64>();
+            let normalizing_factor = filtered_probs
+                .as_slice()
+                .iter()
+                .map(|(_, prob)| prob)
+                .sum::<f64>();
             let normalized_probabilities: Vec<(Entity, f64)> = filtered_probs
                 .into_iter()
                 .map(|(entity, prob)| (entity, prob / normalizing_factor))
@@ -90,7 +98,13 @@ fn update_activations_for_all_belief(
     sim_time: &Res<SimulationTime>,
 ) {
     for entry in belief_query.iter() {
-        update_activation(agent, actions_at_previous_time, &entry, belief_query, &sim_time);
+        update_activation(
+            agent,
+            actions_at_previous_time,
+            &entry,
+            belief_query,
+            &sim_time,
+        );
     }
 }
 
@@ -105,8 +119,17 @@ fn update_activation(
     let activations = &agent.activations[sim_time.0 - 1];
     let activation = *activations.get(&belief.0).unwrap_or(&0.0);
 
-    let activation_change_v = activation_change(agent, actions_at_previous_time, belief, belief_query, &SimulationTime(sim_time.0 - 1));
-    let new_activation = f64::max(-1.0, f64::min(1.0, delta * activation + activation_change_v));
+    let activation_change_v = activation_change(
+        agent,
+        actions_at_previous_time,
+        belief,
+        belief_query,
+        &SimulationTime(sim_time.0 - 1),
+    );
+    let new_activation = f64::max(
+        -1.0,
+        f64::min(1.0, delta * activation + activation_change_v),
+    );
 
     if agent.activations.len() <= sim_time.0 {
         agent.activations.push(EntityHashMap::default());
@@ -144,7 +167,8 @@ fn pressure(
             .map(|(a2, action)| {
                 belief.1.perceptions.get(action).unwrap_or(&0.0) * agent.friends.get(a2).unwrap()
             })
-        .sum::<f64>() / size as f64
+            .sum::<f64>()
+            / size as f64
     }
 }
 
@@ -158,10 +182,11 @@ fn contextualise(
     if size == 0 {
         0.0
     } else {
-       belief_query
+        belief_query
             .iter()
-            .map(|b2| weighted_relationship(agent, belief, &b2, sim_time) )
-            .sum::<f64>() / size as f64
+            .map(|b2| weighted_relationship(agent, belief, &b2, sim_time))
+            .sum::<f64>()
+            / size as f64
     }
 }
 

@@ -6,7 +6,4 @@ use bevy::prelude::*;
 pub struct Behaviour;
 
 #[derive(Bundle)]
-pub struct BehaviourBundle(
-    pub Behaviour,
-    pub Name,
-);
+pub struct BehaviourBundle(pub Behaviour, pub Name);
