@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 bevy = "0.18.1"
+uuid = { version = "1.23.1", features = ["v4"] }
+itertools = "0.14.0"
+rand = "0.9.4"
+bevy_rand = { version = "0.14.2", features = ["wyrand"] }
