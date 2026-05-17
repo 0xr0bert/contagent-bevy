@@ -4,17 +4,27 @@ pub mod resources;
 
 use bevy::prelude::*;
 use bevy_rand::prelude::{EntropyPlugin, WyRand};
+use clap::Parser;
 use queries::agent::{perform_actions, update_activations_for_all_agents_and_beliefs};
 use resources::time::SimulationTime;
 
-const START_TICK: usize = 1;
-const END_TICK: usize = 100;
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Start tick for the simulation
+    start_tick: usize,
+
+    /// End tick for the simulation
+    end_tick: usize,
+}
 
 fn main() {
+    let args = Args::parse();
+
     let mut app = App::new();
 
     app.add_plugins((MinimalPlugins, EntropyPlugin::<WyRand>::default()))
-        .insert_resource(SimulationTime(START_TICK))
+        .insert_resource(SimulationTime(args.start_tick))
         .add_systems(
             Update,
             (
@@ -25,7 +35,7 @@ fn main() {
                 .chain(),
         );
 
-    for _ in START_TICK..=END_TICK {
+    for _ in args.start_tick..=args.end_tick {
         app.update();
     }
 }
