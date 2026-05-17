@@ -152,6 +152,94 @@ fn main() {
         }
 
         json::save_agents_to_zstd_json(&args.output, &components::agent::Agents(final_agents));
+    } else {
+        let mut summaries = Vec::new();
+        let mut world = app.world_mut();
+
+        // Build a mapping from Entity to UUID for reverse lookup
+        let mut entity_to_uuid = std::collections::HashMap::new();
+        let mut uuid_query = world.query::<(Entity, &UUID)>();
+        for (entity, uuid) in uuid_query.iter(world) {
+            entity_to_uuid.insert(entity, uuid.0.to_string());
+        }
+
+        // Get all agents
+        let mut agent_query = world.query::<&Agent>();
+        let agents: Vec<&Agent> = agent_query.iter(world).collect();
+
+        if !agents.is_empty() {
+            let n_ticks = agents[0].activations.len();
+            for t in 0..n_ticks {
+                let mut mean_activations = std::collections::HashMap::new();
+                let mut sd_activations = std::collections::HashMap::new();
+                let mut median_activations = std::collections::HashMap::new();
+                let mut nonzero_activations = std::collections::HashMap::new();
+                let mut n_performers = std::collections::HashMap::new();
+
+                // Collect all belief entities present at this tick across all agents
+                let mut belief_entities = std::collections::HashSet::new();
+                for agent in &agents {
+                    if let Some(layer) = agent.activations.get(t) {
+                        for entity in layer.keys() {
+                            belief_entities.insert(*entity);
+                        }
+                    }
+                }
+
+                for belief_entity in belief_entities {
+                    if let Some(uuid_str) = entity_to_uuid.get(&belief_entity) {
+                        let mut values: Vec<f64> = agents.iter()
+                            .filter_map(|a| a.activations.get(t).and_then(|layer| layer.get(&belief_entity)).cloned())
+                            .collect();
+
+                        if !values.is_empty() {
+                            let n = values.len() as f64;
+                            let mean = values.iter().sum::<f64>() / n;
+                            mean_activations.insert(uuid_str.clone(), mean);
+
+                            if values.len() > 1 {
+                                let variance = values.iter()
+                                    .map(|v| (v - mean).powi(2))
+                                    .sum::<f64>() / (n - 1.0);
+                                sd_activations.insert(uuid_str.clone(), variance.sqrt());
+                            } else {
+                                sd_activations.insert(uuid_str.clone(), 0.0);
+                            }
+
+                            values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                            let median = if values.len() % 2 == 0 {
+                                (values[values.len() / 2 - 1] + values[values.len() / 2]) / 2.0
+                            } else {
+                                values[values.len() / 2]
+                            };
+                            median_activations.insert(uuid_str.clone(), median);
+
+                            let nonzero = values.iter().filter(|&&v| v != 0.0).count() as i32;
+                            nonzero_activations.insert(uuid_str.clone(), nonzero);
+                        }
+                    }
+                }
+
+                // Count performers for each action at this tick
+                for agent in &agents {
+                    if let Some(action_entity) = agent.actions.get(t) {
+                        if let Some(uuid_str) = entity_to_uuid.get(action_entity) {
+                            *n_performers.entry(uuid_str.clone()).or_insert(0) += 1;
+                        }
+                    }
+                }
+
+                summaries.push(json::SummarySpec {
+                    mean_activations,
+                    sd_activations,
+                    median_activations,
+                    nonzero_activations,
+                    n_performers,
+                });
+            }
+        }
+
+        json::save_summaries_to_zstd_json(&args.output, &summaries);
     }
 }
 
