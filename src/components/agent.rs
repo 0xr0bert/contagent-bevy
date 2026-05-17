@@ -18,7 +18,6 @@ pub struct Agent {
 pub struct Agents(pub Vec<AgentData>);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct AgentData {
     pub uuid: UUID,
     pub actions: Vec<String>,

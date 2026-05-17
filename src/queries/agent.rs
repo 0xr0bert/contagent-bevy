@@ -55,7 +55,8 @@ fn perform_action(
         agent.actions.push(last_prob.0)
     } else {
         let filtered_probs: Vec<(Entity, f64)> = unnormalized_probabilities
-            .into_iter()
+            .iter()
+            .cloned()
             .filter(|(_, prob)| *prob >= 0.0)
             .collect();
         if filtered_probs.len() == 1 {
@@ -66,14 +67,28 @@ fn perform_action(
                 .iter()
                 .map(|(_, prob)| prob)
                 .sum::<f64>();
-            let normalized_probabilities: Vec<(Entity, f64)> = filtered_probs
-                .into_iter()
-                .map(|(entity, prob)| (entity, prob / normalizing_factor))
-                .collect();
-            let selected_action = normalized_probabilities
-                .choose_weighted(rng, |(_, prob)| *prob)
-                .unwrap();
-            agent.actions.push(selected_action.0)
+            
+            if normalizing_factor > 0.0 {
+                let normalized_probabilities: Vec<(Entity, f64)> = filtered_probs
+                    .into_iter()
+                    .map(|(entity, prob)| (entity, prob / normalizing_factor))
+                    .collect();
+                
+                match normalized_probabilities.choose_weighted(rng, |(_, prob)| *prob) {
+                    Ok(selected_action) => agent.actions.push(selected_action.0),
+                    Err(e) => {
+                        warn!("Failed to choose action with weights: {:?}. Defaulting to first behavior.", e);
+                        agent.actions.push(unnormalized_probabilities[0].0);
+                    }
+                }
+            } else {
+                // If all weights are 0.0, choose one behavior at random
+                if let Some(selected) = unnormalized_probabilities.choose(rng) {
+                    agent.actions.push(selected.0);
+                } else {
+                    error!("No behaviors available for action selection!");
+                }
+            }
         }
     }
 }
@@ -168,7 +183,7 @@ fn pressure(
             .as_slice()
             .iter()
             .map(|(a2, action)| {
-                belief.1.perceptions.get(action).unwrap_or(&0.0) * agent.friends.get(a2).unwrap()
+                belief.1.perceptions.get(action).unwrap_or(&0.0) * agent.friends.get(a2).unwrap_or(&0.0)
             })
             .sum::<f64>()
             / size as f64

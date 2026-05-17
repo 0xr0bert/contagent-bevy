@@ -34,7 +34,6 @@ pub fn save_agents_to_zstd_json<P: AsRef<Path>>(path: P, agents: &Agents) {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct SummarySpec {
     pub mean_activations: std::collections::HashMap<String, f64>,
     pub sd_activations: std::collections::HashMap<String, f64>,
