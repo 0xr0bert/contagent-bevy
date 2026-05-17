@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::io::Read;
+use std::io::{Read, Write};
 use crate::components::behaviour::Behaviours;
 use crate::components::belief::Beliefs;
 use crate::components::agent::Agents;
@@ -21,4 +21,12 @@ pub fn load_agents_from_zstd_json<P: AsRef<Path>>(path: P) -> Agents {
     let mut json = String::new();
     decoder.read_to_string(&mut json).expect("Unable to decompress agents file");
     serde_json::from_str(&json).expect("JSON was not well-formatted")
+}
+
+pub fn save_agents_to_zstd_json<P: AsRef<Path>>(path: P, agents: &Agents) {
+    let json = serde_json::to_string(agents).expect("Failed to serialize agents");
+    let file = fs::File::create(path).expect("Unable to create output file");
+    let mut encoder = zstd::Encoder::new(file, 3).expect("Unable to create zstd encoder");
+    encoder.write_all(json.as_bytes()).expect("Failed to write to zstd encoder");
+    encoder.finish().expect("Failed to finish zstd compression");
 }
