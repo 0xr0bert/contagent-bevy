@@ -40,6 +40,9 @@ struct Args {
     /// Whether to output the full agents data
     #[arg(action = clap::ArgAction::Set)]
     full_output: bool,
+
+    /// Optional RNG seed
+    seed: Option<u64>,
 }
 
 fn main() {
@@ -63,10 +66,16 @@ fn setup_app(args: &Args, agents: Agents, beliefs: components::belief::Beliefs, 
 
     app.add_plugins((
         MinimalPlugins,
-        EntropyPlugin::<WyRand>::default(),
         bevy::log::LogPlugin::default(),
-    ))
-    .insert_resource(SimulationTime(args.start_tick))
+    ));
+
+    if let Some(seed) = args.seed {
+        app.add_plugins(EntropyPlugin::<WyRand>::with_seed(seed.to_le_bytes()));
+    } else {
+        app.add_plugins(EntropyPlugin::<WyRand>::default());
+    }
+
+    app.insert_resource(SimulationTime(args.start_tick))
     .insert_resource(agents)
     .insert_resource(beliefs)
     .insert_resource(behaviours)
