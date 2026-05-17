@@ -23,24 +23,26 @@ pub fn perform_actions(
     let behaviours: Vec<Entity> = behaviour_query.iter().collect();
 
     agent_query.par_iter_mut().for_each(|(mut agent, uuid)| {
-        // Deterministic seeding per agent and tick, incorporating the global seed if provided
         let base_seed = seed.0.unwrap_or(0);
         let inner_rng = wyrand::WyRand::new((uuid.0.as_u128() ^ (sim_time.0 as u128) ^ (base_seed as u128)) as u64);
         let mut rng = WyRand::new(inner_rng);
-        perform_action(&mut agent, &beliefs, &behaviours, &mut rng);
+        perform_action(&mut agent, &beliefs, &behaviours, &mut rng, sim_time.0);
     });
 }
 
-fn perform_action(
+pub fn perform_action(
     agent: &mut Agent,
     beliefs: &[Entity],
     behaviours: &[Entity],
     rng: &mut WyRand,
+    tick: usize,
 ) {
     if behaviours.is_empty() {
         warn!("No behaviors available for action selection.");
         return;
     }
+
+    let current_activations = agent.activations.get(tick).expect("Activations for current tick missing");
 
     let unnormalized_probabilities: Vec<(Entity, f64)> = behaviours
         .iter()
@@ -50,12 +52,14 @@ fn perform_action(
                 beliefs
                     .iter()
                     .map(|belief_entity| {
-                        agent
+                        let weight = agent
                             .performance_relationships
                             .get(belief_entity)
                             .and_then(|m| m.get(behaviour_entity))
                             .copied()
-                            .unwrap_or(0.0)
+                            .unwrap_or(0.0);
+                        let activation = current_activations.get(belief_entity).copied().unwrap_or(0.0);
+                        weight * activation
                     })
                     .sum::<f64>(),
             )

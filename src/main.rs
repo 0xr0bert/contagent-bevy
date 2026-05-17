@@ -23,7 +23,7 @@ struct Args {
     /// Start tick for the simulation
     start_tick: usize,
 
-    /// End tick for the simulation
+    /// End tick for the simulation (exclusive)
     end_tick: usize,
 
     /// Path to the agents ZSTD-compressed JSON file
@@ -53,16 +53,49 @@ fn main() {
     let beliefs = load_beliefs_from_json(&args.beliefs_path);
     let behaviours = load_behaviours_from_json(&args.behaviours_path);
 
-    let mut app = setup_app(&args, agents_initial, beliefs, behaviours);
+    let seed_value = args.seed.unwrap_or_else(|| rand::random::<u64>());
+    let mut app = setup_app(&args, agents_initial, beliefs, behaviours, seed_value);
 
-    for _ in args.start_tick..=args.end_tick {
-        app.update();
+    // 1. Run Startup systems to spawn and link everything
+    app.world_mut().run_schedule(Startup);
+
+    // 2. Priming step: performActions(startTime - 1)
+    {
+        let priming_tick = args.start_tick - 1;
+        use bevy::ecs::system::SystemState;
+        let mut system_state: SystemState<(
+            Query<(&mut Agent, &Uuid)>,
+            Query<Entity, With<components::belief::Belief>>,
+            Query<Entity, With<components::behaviour::Behaviour>>,
+            Res<Seed>,
+        )> = SystemState::new(app.world_mut());
+        
+        let (mut agent_query, belief_query, behaviour_query, seed) = system_state.get_mut(app.world_mut());
+        
+        info!("[time={}] Priming actions", priming_tick);
+        let beliefs_vec: Vec<Entity> = belief_query.iter().collect();
+        let behaviours_vec: Vec<Entity> = behaviour_query.iter().collect();
+        let base_seed = seed.0.unwrap_or(0);
+
+        agent_query.par_iter_mut().for_each(|(mut agent, uuid)| {
+            let inner_rng = wyrand::WyRand::new((uuid.0.as_u128() ^ (priming_tick as u128) ^ (base_seed as u128)) as u64);
+            let mut rng = WyRand::new(inner_rng);
+            queries::agent::perform_action(&mut agent, &beliefs_vec, &behaviours_vec, &mut rng, priming_tick);
+        });
+        
+        system_state.apply(app.world_mut());
+    }
+
+    // 3. Main simulation loop: for (t in startTime until endTime)
+    for _ in args.start_tick..args.end_tick {
+        // Runs systems in Update schedule
+        app.world_mut().run_schedule(Update);
     }
 
     handle_output(&args, &mut app);
 }
 
-fn setup_app(args: &Args, agents: Agents, beliefs: components::belief::Beliefs, behaviours: components::behaviour::Behaviours) -> App {
+fn setup_app(args: &Args, agents: Agents, beliefs: components::belief::Beliefs, behaviours: components::behaviour::Behaviours, seed_value: u64) -> App {
     let mut app = App::new();
 
     app.add_plugins((
@@ -70,13 +103,8 @@ fn setup_app(args: &Args, agents: Agents, beliefs: components::belief::Beliefs, 
         bevy::log::LogPlugin::default(),
     ));
 
-    app.insert_resource(Seed(args.seed));
-
-    if let Some(seed) = args.seed {
-        app.add_plugins(EntropyPlugin::<WyRand>::with_seed(seed.to_le_bytes()));
-    } else {
-        app.add_plugins(EntropyPlugin::<WyRand>::default());
-    }
+    app.insert_resource(Seed(Some(seed_value)));
+    app.add_plugins(EntropyPlugin::<WyRand>::with_seed(seed_value.to_le_bytes()));
 
     app.insert_resource(SimulationTime(args.start_tick))
     .insert_resource(agents)
@@ -93,8 +121,8 @@ fn setup_app(args: &Args, agents: Agents, beliefs: components::belief::Beliefs, 
     .add_systems(
         Update,
         (
-            perform_actions,
             update_activations_for_all_agents_and_beliefs,
+            perform_actions,
             increment_tick,
         )
             .chain(),
@@ -111,7 +139,7 @@ fn handle_output(args: &Args, app: &mut App) {
         let final_agents = collect_final_agents(world, &entity_to_uuid);
         json::save_agents_to_zstd_json(&args.output, &Agents(final_agents));
     } else {
-        let summaries = generate_summaries(world, &entity_to_uuid);
+        let summaries = generate_summaries(&args, world, &entity_to_uuid);
         json::save_summaries_to_zstd_json(&args.output, &summaries);
     }
 }
@@ -168,7 +196,7 @@ fn collect_final_agents(world: &mut World, entity_to_uuid: &HashMap<Entity, Stri
     }).collect()
 }
 
-fn generate_summaries(world: &mut World, entity_to_uuid: &HashMap<Entity, String>) -> Vec<SummarySpec> {
+fn generate_summaries(args: &Args, world: &mut World, entity_to_uuid: &HashMap<Entity, String>) -> Vec<SummarySpec> {
     let mut agent_query = world.query::<&Agent>();
     let agents: Vec<&Agent> = agent_query.iter(world).collect();
 
@@ -176,15 +204,14 @@ fn generate_summaries(world: &mut World, entity_to_uuid: &HashMap<Entity, String
         return Vec::new();
     }
 
-    let n_ticks = agents[0].activations.len();
-    (0..n_ticks).map(|t| {
+    // Match Kotlin: summaries for startTime until endTime
+    (args.start_tick..args.end_tick).map(|t| {
         let mut mean_activations = HashMap::new();
         let mut sd_activations = HashMap::new();
         let mut median_activations = HashMap::new();
         let mut nonzero_activations = HashMap::new();
         let mut n_performers = HashMap::new();
 
-        // Use a set to identify all belief entities across all agents for this tick
         let belief_entities: HashSet<Entity> = agents.iter()
             .filter_map(|a| a.activations.get(t))
             .flat_map(|layer| layer.keys().copied())
