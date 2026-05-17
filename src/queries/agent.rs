@@ -1,7 +1,7 @@
 use crate::components::agent::Agent;
 use crate::components::behaviour::Behaviour;
 use crate::components::belief::Belief;
-use crate::components::identifiers::UUID;
+use crate::components::identifiers::Uuid;
 use crate::resources::time::SimulationTime;
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
@@ -12,7 +12,7 @@ use rand::prelude::*;
 use crate::resources::seed::Seed;
 
 pub fn perform_actions(
-    mut agent_query: Query<(&mut Agent, &UUID)>,
+    mut agent_query: Query<(&mut Agent, &Uuid)>,
     belief_query: Query<Entity, With<Belief>>,
     behaviour_query: Query<Entity, With<Behaviour>>,
     sim_time: Res<SimulationTime>,
@@ -37,6 +37,11 @@ fn perform_action(
     behaviours: &[Entity],
     rng: &mut WyRand,
 ) {
+    if behaviours.is_empty() {
+        warn!("No behaviors available for action selection.");
+        return;
+    }
+
     let unnormalized_probabilities: Vec<(Entity, f64)> = behaviours
         .iter()
         .map(|behaviour_entity| {
@@ -48,9 +53,9 @@ fn perform_action(
                         agent
                             .performance_relationships
                             .get(belief_entity)
-                            .expect("Missing performance relationship")
-                            .get(behaviour_entity)
-                            .unwrap_or(&0.0)
+                            .and_then(|m| m.get(behaviour_entity))
+                            .copied()
+                            .unwrap_or(0.0)
                     })
                     .sum::<f64>(),
             )
@@ -58,21 +63,27 @@ fn perform_action(
         .sorted_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .collect();
 
-    let last_prob = unnormalized_probabilities.last().unwrap();
+    let last_prob = unnormalized_probabilities.last().expect("Checked non-empty above");
 
     if last_prob.1 < 0.0 {
         agent.actions.push(last_prob.0)
     } else {
         let filtered_probs: Vec<(Entity, f64)> = unnormalized_probabilities
             .iter()
-            .cloned()
+            .copied()
             .filter(|(_, prob)| *prob >= 0.0)
             .collect();
+        
+        if filtered_probs.is_empty() {
+             // Fallback if all probabilities were negative but we missed it
+             agent.actions.push(unnormalized_probabilities[0].0);
+             return;
+        }
+
         if filtered_probs.len() == 1 {
             agent.actions.push(filtered_probs[0].0)
         } else {
             let normalizing_factor = filtered_probs
-                .as_slice()
                 .iter()
                 .map(|(_, prob)| prob)
                 .sum::<f64>();
@@ -108,9 +119,11 @@ pub fn update_activations_for_all_agents_and_beliefs(
     sim_time: Res<SimulationTime>,
 ) {
     info!("[time={}] Perceiving beliefs", sim_time.0);
-    let actions: Vec<(Entity, Entity)> = agent_query
+    
+    // Map Agent Entity -> Chosen Action Entity for O(1) lookup during pressure calculation
+    let actions: EntityHashMap<Entity> = agent_query
         .iter()
-        .map(|(entity, agent)| (entity, agent.actions[sim_time.0 - 1]))
+        .filter_map(|(entity, agent)| agent.actions.get(sim_time.0 - 1).copied().map(|action| (entity, action)))
         .collect();
 
     let beliefs: Vec<(Entity, &Belief)> = belief_query.iter().collect();
@@ -122,7 +135,7 @@ pub fn update_activations_for_all_agents_and_beliefs(
 
 fn update_activations_for_all_belief(
     agent: &mut Agent,
-    actions_at_previous_time: &[(Entity, Entity)],
+    actions_at_previous_time: &EntityHashMap<Entity>,
     beliefs: &[(Entity, &Belief)],
     sim_time: &SimulationTime,
 ) {
@@ -139,12 +152,12 @@ fn update_activations_for_all_belief(
 
 fn update_activation(
     agent: &mut Agent,
-    actions_at_previous_time: &[(Entity, Entity)],
+    actions_at_previous_time: &EntityHashMap<Entity>,
     belief: &(Entity, &Belief),
     beliefs: &[(Entity, &Belief)],
     sim_time: &SimulationTime,
 ) {
-    let delta = *agent.deltas.get(&belief.0).expect("Missing delta");
+    let delta = *agent.deltas.get(&belief.0).unwrap_or(&0.0);
     let activations = &agent.activations[sim_time.0 - 1];
     let activation = *activations.get(&belief.0).unwrap_or(&0.0);
 
@@ -155,10 +168,7 @@ fn update_activation(
         beliefs,
         &SimulationTime(sim_time.0 - 1),
     );
-    let new_activation = f64::max(
-        -1.0,
-        f64::min(1.0, delta * activation + activation_change_v),
-    );
+    let new_activation = (delta * activation + activation_change_v).clamp(-1.0, 1.0);
 
     if agent.activations.len() <= sim_time.0 {
         agent.activations.push(EntityHashMap::default());
@@ -168,7 +178,7 @@ fn update_activation(
 
 fn activation_change(
     agent: &mut Agent,
-    actions_at_previous_time: &[(Entity, Entity)],
+    actions_at_previous_time: &EntityHashMap<Entity>,
     belief: &(Entity, &Belief),
     beliefs: &[(Entity, &Belief)],
     sim_time: &SimulationTime,
@@ -183,17 +193,22 @@ fn activation_change(
 
 fn pressure(
     agent: &mut Agent,
-    actions_at_previous_time: &[(Entity, Entity)],
+    actions_at_previous_time: &EntityHashMap<Entity>,
     belief: &(Entity, &Belief),
 ) -> f64 {
     let size = agent.friends.len();
     if size == 0 {
         0.0
     } else {
-        actions_at_previous_time
+        // O(F) complexity where F is number of friends, instead of O(N)
+        agent.friends
             .iter()
-            .map(|(a2, action)| {
-                belief.1.perceptions.get(action).unwrap_or(&0.0) * agent.friends.get(a2).unwrap_or(&0.0)
+            .map(|(friend_entity, friend_weight)| {
+                if let Some(action) = actions_at_previous_time.get(friend_entity) {
+                    belief.1.perceptions.get(action).copied().unwrap_or(0.0) * friend_weight
+                } else {
+                    0.0
+                }
             })
             .sum::<f64>()
             / size as f64

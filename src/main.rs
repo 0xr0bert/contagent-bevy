@@ -9,7 +9,7 @@ use clap::Parser;
 use components::agent::{spawn_agents, setup_agent_links, Agent, AgentData, Agents};
 use components::behaviour::spawn_behaviours;
 use components::belief::{setup_belief_links, spawn_beliefs};
-use components::identifiers::UUID;
+use components::identifiers::Uuid;
 use json::{load_agents_from_zstd_json, load_behaviours_from_json, load_beliefs_from_json, SummarySpec};
 use queries::agent::{perform_actions, update_activations_for_all_agents_and_beliefs};
 use resources::time::SimulationTime;
@@ -118,7 +118,7 @@ fn handle_output(args: &Args, app: &mut App) {
 
 fn build_entity_to_uuid_map(world: &mut World) -> HashMap<Entity, String> {
     let mut map = HashMap::new();
-    let mut query = world.query::<(Entity, &UUID)>();
+    let mut query = world.query::<(Entity, &Uuid)>();
     for (entity, uuid) in query.iter(world) {
         map.insert(entity, uuid.0.to_string());
     }
@@ -126,10 +126,9 @@ fn build_entity_to_uuid_map(world: &mut World) -> HashMap<Entity, String> {
 }
 
 fn collect_final_agents(world: &mut World, entity_to_uuid: &HashMap<Entity, String>) -> Vec<AgentData> {
-    let mut final_agents = Vec::new();
-    let mut agent_query = world.query::<(&Agent, &UUID)>();
+    let mut agent_query = world.query::<(&Agent, &Uuid)>();
     
-    for (agent, uuid) in agent_query.iter(world) {
+    agent_query.iter(world).map(|(agent, uuid)| {
         let actions = agent.actions.iter()
             .filter_map(|e| entity_to_uuid.get(e).cloned())
             .collect();
@@ -158,48 +157,43 @@ fn collect_final_agents(world: &mut World, entity_to_uuid: &HashMap<Entity, Stri
                 })
             }).collect();
 
-        final_agents.push(AgentData {
+        AgentData {
             uuid: uuid.clone(),
             actions,
             activations,
             deltas,
             friends,
             performance_relationships,
-        });
-    }
-    final_agents
+        }
+    }).collect()
 }
 
 fn generate_summaries(world: &mut World, entity_to_uuid: &HashMap<Entity, String>) -> Vec<SummarySpec> {
-    let mut summaries = Vec::new();
     let mut agent_query = world.query::<&Agent>();
     let agents: Vec<&Agent> = agent_query.iter(world).collect();
 
     if agents.is_empty() {
-        return summaries;
+        return Vec::new();
     }
 
     let n_ticks = agents[0].activations.len();
-    for t in 0..n_ticks {
+    (0..n_ticks).map(|t| {
         let mut mean_activations = HashMap::new();
         let mut sd_activations = HashMap::new();
         let mut median_activations = HashMap::new();
         let mut nonzero_activations = HashMap::new();
         let mut n_performers = HashMap::new();
 
-        let mut belief_entities = HashSet::new();
-        for agent in &agents {
-            if let Some(layer) = agent.activations.get(t) {
-                for entity in layer.keys() {
-                    belief_entities.insert(*entity);
-                }
-            }
-        }
+        // Use a set to identify all belief entities across all agents for this tick
+        let belief_entities: HashSet<Entity> = agents.iter()
+            .filter_map(|a| a.activations.get(t))
+            .flat_map(|layer| layer.keys().copied())
+            .collect();
 
         for belief_entity in belief_entities {
             if let Some(uuid_str) = entity_to_uuid.get(&belief_entity) {
                 let mut values: Vec<f64> = agents.iter()
-                    .filter_map(|a| a.activations.get(t).and_then(|layer| layer.get(&belief_entity)).cloned())
+                    .filter_map(|a| a.activations.get(t).and_then(|layer| layer.get(&belief_entity)).copied())
                     .collect();
 
                 if !values.is_empty() {
@@ -216,8 +210,8 @@ fn generate_summaries(world: &mut World, entity_to_uuid: &HashMap<Entity, String
                         sd_activations.insert(uuid_str.clone(), 0.0);
                     }
 
-                    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    let median = if values.len() % 2 == 0 {
+                    values.sort_by(|a, b| a.partial_cmp(b).expect("NaN in activations"));
+                    let median = if values.len().is_multiple_of(2) {
                         (values[values.len() / 2 - 1] + values[values.len() / 2]) / 2.0
                     } else {
                         values[values.len() / 2]
@@ -231,22 +225,21 @@ fn generate_summaries(world: &mut World, entity_to_uuid: &HashMap<Entity, String
         }
 
         for agent in &agents {
-            if let Some(action_entity) = agent.actions.get(t) {
-                if let Some(uuid_str) = entity_to_uuid.get(action_entity) {
-                    *n_performers.entry(uuid_str.clone()).or_insert(0) += 1;
-                }
+            if let Some(action_entity) = agent.actions.get(t)
+                && let Some(uuid_str) = entity_to_uuid.get(action_entity)
+            {
+                *n_performers.entry(uuid_str.clone()).or_insert(0) += 1;
             }
         }
 
-        summaries.push(SummarySpec {
+        SummarySpec {
             mean_activations,
             sd_activations,
             median_activations,
             nonzero_activations,
             n_performers,
-        });
-    }
-    summaries
+        }
+    }).collect()
 }
 
 fn increment_tick(mut sim_time: ResMut<SimulationTime>) {
