@@ -43,7 +43,11 @@ fn main() {
 
     let mut app = App::new();
 
-    app.add_plugins((MinimalPlugins, EntropyPlugin::<WyRand>::default()))
+    app.add_plugins((
+        MinimalPlugins,
+        EntropyPlugin::<WyRand>::default(),
+        bevy::log::LogPlugin::default(),
+    ))
         .insert_resource(SimulationTime(args.start_tick))
         .insert_resource(agents)
         .insert_resource(beliefs)

@@ -14,7 +14,9 @@ pub fn perform_actions(
     belief_query: Query<Entity, With<Belief>>,
     behaviour_query: Query<Entity, With<Behaviour>>,
     mut rng: Single<&mut WyRand, With<GlobalRng>>,
+    sim_time: Res<SimulationTime>,
 ) {
+    info!("[time={}] performing actions", sim_time.0);
     for mut agent in agent_query.iter_mut() {
         perform_action(&mut agent, belief_query, behaviour_query, &mut rng);
     }
@@ -81,6 +83,7 @@ pub fn update_activations_for_all_agents_and_beliefs(
     belief_query: Query<(Entity, &Belief)>,
     sim_time: Res<SimulationTime>,
 ) {
+    info!("[time={}] Perceiving beliefs", sim_time.0);
     let actions: Vec<(Entity, Entity)> = agent_query
         .iter()
         .map(|(entity, agent)| (entity, agent.actions[sim_time.0 - 1]))
