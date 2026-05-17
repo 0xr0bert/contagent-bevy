@@ -1,5 +1,7 @@
 # Contagent Bevy
 
+> **⚠️ WARNING:** This is not production-ready code. For the stable, production-ready version of this simulation, please use the Kotlin implementation at [github.com/0xr0bert/contagent](https://github.com/0xr0bert/contagent) for now.
+
 A high-performance, deterministic agent-based simulation built with the Bevy engine in Rust. This project simulates agent belief perception and action selection based on complex relationships and performance metrics.
 
 ## Features
